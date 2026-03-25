@@ -8,6 +8,9 @@ import urllib.request
 import time
 from flask import Flask, render_template_string, request, jsonify
 from functools import wraps
+import webbrowser
+import threading
+import sys
 
 app = Flask(__name__)
 
@@ -272,6 +275,10 @@ HTML_TEMPLATE = '''
             border-color: #00d4ff;
         }
         
+        .form-check-label {
+            color: rgba(255,255,255,0.8);
+        }
+        
         .btn-outline-secondary {
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
@@ -282,6 +289,17 @@ HTML_TEMPLATE = '''
             background: rgba(255, 255, 255, 0.2);
             border-color: rgba(255, 255, 255, 0.3);
             color: #fff;
+        }
+        
+        .current-wifi-badge {
+            background: linear-gradient(45deg, #10b981, #059669);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+        
+        .current-wifi-badge.disconnected {
+            background: linear-gradient(45deg, #ef4444, #dc2626);
         }
     </style>
 </head>
@@ -297,8 +315,15 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
                 <div class="d-flex align-items-center">
-                    <span class="status-indicator status-online" id="connectionStatus"></span>
-                    <span id="connectionText">เชื่อมต่อแล้ว</span>
+                    <div class="me-4 text-end" id="currentWifiInfo" style="display: none;">
+                        <small class="text-muted d-block">WiFi ที่เชื่อมต่อ</small>
+                        <strong id="currentWifiSSID">-</strong>
+                        <small class="text-muted" id="currentWifiSignal"></small>
+                    </div>
+                    <div>
+                        <span class="status-indicator status-online" id="connectionStatus"></span>
+                        <span id="connectionText">เชื่อมต่อแล้ว</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -379,10 +404,19 @@ HTML_TEMPLATE = '''
             <div class="col-12">
                 <div class="glass-card p-4">
                     <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h5 class="mb-0"><i class="fas fa-wifi me-2"></i>WiFi Networks ที่พบ</h5>
-                        <button class="btn-scan btn-sm" id="scanBtn" onclick="scanWifi()">
-                            <i class="fas fa-sync-alt me-1"></i> Scan WiFi
-                        </button>
+                        <div class="d-flex align-items-center">
+                            <h5 class="mb-0"><i class="fas fa-wifi me-2"></i>WiFi Networks ที่พบ</h5>
+                            <small class="ms-2 text-muted" id="autoScanStatus"></small>
+                        </div>
+                        <div class="d-flex align-items-center">
+                            <div class="form-check form-switch me-3">
+                                <input class="form-check-input" type="checkbox" id="autoScanToggle" checked onchange="toggleAutoScan()">
+                                <label class="form-check-label" for="autoScanToggle">Auto Scan</label>
+                            </div>
+                            <button class="btn-scan btn-sm" id="scanBtn" onclick="scanWifi()">
+                                <i class="fas fa-sync-alt me-1"></i> Scan WiFi
+                            </button>
+                        </div>
                     </div>
                     <div id="wifiResults" class="row">
                         <div class="col-12 text-center py-4">
@@ -575,6 +609,98 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
+        <div class="row mb-4">
+            <div class="col-md-6 mb-4">
+                <div class="glass-card p-4">
+                    <h5 class="mb-4"><i class="fas fa-sliders-h me-2"></i>การตั้งค่า Network</h5>
+                    <div class="network-settings">
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center p-2 rounded" style="background: rgba(255,255,255,0.05);">
+                                <div>
+                                    <small class="text-muted d-block">DHCP</small>
+                                    <span id="dhcpStatus">-</span>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="dhcpToggle" checked disabled>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center p-2 rounded" style="background: rgba(255,255,255,0.05);">
+                                <div>
+                                    <small class="text-muted d-block">DNS Auto</small>
+                                    <span id="dnsStatus">-</span>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="dnsToggle" checked disabled>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center p-2 rounded" style="background: rgba(255,255,255,0.05);">
+                                <div>
+                                    <small class="text-muted d-block">Firewall</small>
+                                    <span id="firewallStatus">-</span>
+                                </div>
+                                <span class="badge bg-success" id="firewallBadge">-</span>
+                            </div>
+                        </div>
+                        <hr style="border-color: rgba(255,255,255,0.1);">
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-outline-light btn-sm" onclick="refreshNetworkSettings()">
+                                <i class="fas fa-sync-alt me-2"></i>รีเฟรชการตั้งค่า
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 mb-4">
+                <div class="glass-card p-4">
+                    <h5 class="mb-4"><i class="fas fa-globe me-2"></i>การเข้าถึง Internet</h5>
+                    <div class="internet-access">
+                        <div class="mb-3">
+                            <div class="d-flex align-items-center p-3 rounded" style="background: rgba(255,255,255,0.05);">
+                                <i class="fas fa-check-circle fa-2x me-3 text-success" id="internetIcon"></i>
+                                <div>
+                                    <strong id="internetStatus">กำลังตรวจสอบ...</strong>
+                                    <small class="text-muted d-block" id="internetLatency"></small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row text-center">
+                            <div class="col-4">
+                                <div class="p-2 rounded" style="background: rgba(255,255,255,0.05);">
+                                    <i class="fas fa-server fa-lg text-info mb-2"></i>
+                                    <small class="d-block text-muted">Ping</small>
+                                    <strong id="pingValue">-</strong>
+                                </div>
+                            </div>
+                            <div class="col-4">
+                                <div class="p-2 rounded" style="background: rgba(255,255,255,0.05);">
+                                    <i class="fas fa-download fa-lg text-primary mb-2"></i>
+                                    <small class="d-block text-muted">Download</small>
+                                    <strong id="downloadSpeed">-</strong>
+                                </div>
+                            </div>
+                            <div class="col-4">
+                                <div class="p-2 rounded" style="background: rgba(255,255,255,0.05);">
+                                    <i class="fas fa-upload fa-lg text-warning mb-2"></i>
+                                    <small class="d-block text-muted">Upload</small>
+                                    <strong id="uploadSpeed">-</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <hr style="border-color: rgba(255,255,255,0.1);">
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-outline-light btn-sm" onclick="testInternetConnection()">
+                                <i class="fas fa-bolt me-2"></i>ทดสอบการเข้าถึง
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="row">
             <div class="col-12">
                 <div class="glass-card p-4">
@@ -668,6 +794,88 @@ HTML_TEMPLATE = '''
             }
         }
 
+        let autoScanInterval = null;
+        
+        function toggleAutoScan() {
+            const toggle = document.getElementById('autoScanToggle');
+            const status = document.getElementById('autoScanStatus');
+            
+            if (toggle.checked) {
+                status.textContent = '(Auto Scan: 30s)';
+                autoScanInterval = setInterval(() => {
+                    scanWifi();
+                    fetchNetworkInfo();
+                    testInternetConnection();
+                }, 30000);
+            } else {
+                status.textContent = '(Auto Scan: Off)';
+                if (autoScanInterval) {
+                    clearInterval(autoScanInterval);
+                    autoScanInterval = null;
+                }
+            }
+        }
+        
+        async function refreshNetworkSettings() {
+            try {
+                const response = await fetch('/api/network-settings');
+                const data = await response.json();
+                
+                document.getElementById('dhcpStatus').textContent = data.dhcp ? 'เปิด' : 'ปิด';
+                document.getElementById('dnsStatus').textContent = data.dns_auto ? 'อัตโนมัติ' : 'กำหนดเอง';
+                document.getElementById('firewallStatus').textContent = data.firewall ? 'เปิดใช้งาน' : 'ปิดใช้งาน';
+                
+                const firewallBadge = document.getElementById('firewallBadge');
+                if (data.firewall) {
+                    firewallBadge.className = 'badge bg-success';
+                    firewallBadge.textContent = 'ปลอดภัย';
+                } else {
+                    firewallBadge.className = 'badge bg-warning';
+                    firewallBadge.textContent = 'เสี่ยง';
+                }
+            } catch (error) {
+                console.error('Error fetching network settings:', error);
+            }
+        }
+        
+        async function testInternetConnection() {
+            const internetIcon = document.getElementById('internetIcon');
+            const internetStatus = document.getElementById('internetStatus');
+            const internetLatency = document.getElementById('internetLatency');
+            
+            internetStatus.textContent = 'กำลังทดสอบ...';
+            internetIcon.className = 'fas fa-spinner fa-2x me-3 text-warning';
+            internetIcon.style.animation = 'spin 1s linear infinite';
+            
+            try {
+                const startTime = performance.now();
+                await fetch('https://www.google.com/favicon.ico', { mode: 'no-cors' });
+                const ping = Math.round(performance.now() - startTime);
+                
+                internetIcon.className = 'fas fa-check-circle fa-2x me-3 text-success';
+                internetIcon.style.animation = 'none';
+                internetStatus.textContent = 'เชื่อมต่อ Internet ได้';
+                internetLatency.textContent = 'Latency: ' + ping + ' ms';
+                
+                document.getElementById('pingValue').textContent = ping + ' ms';
+                
+                const btn = document.getElementById('startTest');
+                if (btn) {
+                    document.getElementById('downloadSpeed').textContent = btn.textContent.includes('ทดสอบ') ? '-' : document.getElementById('speedValue').textContent + ' Mbps';
+                }
+                
+            } catch (error) {
+                internetIcon.className = 'fas fa-times-circle fa-2x me-3 text-danger';
+                internetIcon.style.animation = 'none';
+                internetStatus.textContent = 'ไม่สามารถเข้าถึง Internet';
+                internetLatency.textContent = 'ตรวจสอบการเชื่อมต่อ';
+                
+                document.getElementById('pingValue').textContent = '-';
+                document.getElementById('downloadSpeed').textContent = '-';
+                document.getElementById('uploadSpeed').textContent = '-';
+            }
+        }
+        
         function onSSIDChange() {
             const ssidSelect = document.getElementById('wifiSSID');
             const selectedOption = ssidSelect.options[ssidSelect.selectedIndex];
@@ -763,6 +971,27 @@ HTML_TEMPLATE = '''
                 document.getElementById('publicIp').textContent = data.public_ip || 'N/A';
                 document.getElementById('ispName').innerHTML = '<span style="color: ' + (data.isp?.color || '#00d4ff') + '">' + (data.isp?.name || 'Unknown') + '</span>';
                 document.getElementById('location').textContent = data.location || 'N/A';
+                
+                const currentWifi = data.current_wifi;
+                const wifiInfoDiv = document.getElementById('currentWifiInfo');
+                if (currentWifi && currentWifi.connected && currentWifi.ssid) {
+                    wifiInfoDiv.style.display = 'block';
+                    document.getElementById('currentWifiSSID').textContent = currentWifi.ssid;
+                    document.getElementById('currentWifiSignal').textContent = currentWifi.signal + '%';
+                    document.getElementById('connectionText').textContent = currentWifi.ssid;
+                    
+                    const wifiSelect = document.getElementById('wifiSSID');
+                    for (let i = 0; i < wifiSelect.options.length; i++) {
+                        if (wifiSelect.options[i].value === currentWifi.ssid) {
+                            wifiSelect.selectedIndex = i;
+                            onSSIDChange();
+                            break;
+                        }
+                    }
+                } else {
+                    wifiInfoDiv.style.display = 'none';
+                    document.getElementById('connectionText').textContent = 'ไม่ได้เชื่อมต่อ WiFi';
+                }
                 
                 if (data.networks && data.networks.length > 0) {
                     let html = '';
@@ -1203,6 +1432,14 @@ HTML_TEMPLATE = '''
             getBrowserInfo();
             getSystemInfo();
             initChart();
+            refreshNetworkSettings();
+            testInternetConnection();
+            
+            toggleAutoScan();
+            
+            setTimeout(() => {
+                scanWifi();
+            }, 1500);
         });
 
         if (navigator.connection) {
@@ -1349,6 +1586,219 @@ def get_linux_wifi():
             return {'error': str(e)}
 
 
+def get_network_settings():
+    system = platform.system()
+    settings = {
+        'dhcp': True,
+        'dns_auto': True,
+        'firewall': False,
+        'ip_address': 'N/A',
+        'subnet_mask': 'N/A',
+        'gateway': 'N/A',
+        'dns_primary': 'N/A',
+        'dns_secondary': 'N/A'
+    }
+    
+    try:
+        if system == 'Windows':
+            result = subprocess.run(
+                ['ipconfig'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                if 'IPv4' in line:
+                    settings['ip_address'] = line.split(':')[1].strip() if ':' in line else 'N/A'
+                elif 'Subnet Mask' in line:
+                    settings['subnet_mask'] = line.split(':')[1].strip() if ':' in line else 'N/A'
+                elif 'Default Gateway' in line:
+                    settings['gateway'] = line.split(':')[1].strip() if ':' in line else 'N/A'
+            
+            dns_result = subprocess.run(
+                ['netsh', 'interface', 'ipv4', 'show', 'dns'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            dns_count = 0
+            for line in dns_result.stdout.split('\n'):
+                if 'DHCP' in line and 'Enabled' in line:
+                    settings['dhcp'] = True
+                if 'DNS' in line and '.' in line:
+                    dns_count += 1
+                    if dns_count == 1:
+                        settings['dns_primary'] = line.strip()
+                    elif dns_count == 2:
+                        settings['dns_secondary'] = line.strip()
+            
+            settings['dns_auto'] = settings['dhcp']
+            
+            firewall_result = subprocess.run(
+                ['netsh', 'advfirewall', 'show', 'allprofiles', 'state'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            settings['firewall'] = 'ON' in firewall_result.stdout.upper()
+            
+        elif system == 'Linux':
+            result = subprocess.run(
+                ['ip', 'addr', 'show'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            for line in result.stdout.split('\n'):
+                if 'inet ' in line and '127.0.0.1' not in line:
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        settings['ip_address'] = parts[1].split('/')[0]
+            
+            route_result = subprocess.run(
+                ['ip', 'route', 'show'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            for line in route_result.stdout.split('\n'):
+                if 'default' in line:
+                    parts = line.split()
+                    if 'via' in parts:
+                        idx = parts.index('via')
+                        settings['gateway'] = parts[idx + 1]
+            
+            resolv_result = subprocess.run(
+                ['cat', '/etc/resolv.conf'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            dns_count = 0
+            for line in resolv_result.stdout.split('\n'):
+                if 'nameserver' in line:
+                    dns_count += 1
+                    if dns_count == 1:
+                        settings['dns_primary'] = line.split()[1] if len(line.split()) > 1 else 'N/A'
+                    elif dns_count == 2:
+                        settings['dns_secondary'] = line.split()[1] if len(line.split()) > 1 else 'N/A'
+            
+            settings['dhcp'] = True
+            settings['dns_auto'] = True
+            
+            firewall_result = subprocess.run(
+                ['ufw', 'status'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            settings['firewall'] = 'active' in firewall_result.stdout.lower()
+    
+    except Exception as e:
+        settings['error'] = str(e)
+    
+    return settings
+
+
+def get_current_wifi():
+    system = platform.system()
+    
+    try:
+        if system == 'Windows':
+            result = subprocess.run(
+                ['netsh', 'wlan', 'show', 'interfaces'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            current = {'ssid': None, 'signal': 0, 'bssid': '', 'channel': 0, 'security': '', 'auth': '', 'connected': False}
+            
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                
+                if 'SSID' in line and 'BSSID' not in line:
+                    ssid = line.split(':')[1].strip() if ':' in line else ''
+                    current['ssid'] = ssid
+                    current['connected'] = True
+                
+                elif 'BSSID' in line:
+                    current['bssid'] = line.split(':')[1].strip() if ':' in line else ''
+                
+                elif 'Signal' in line:
+                    try:
+                        signal = line.split(':')[1].strip().replace('%', '')
+                        current['signal'] = int(signal)
+                    except:
+                        pass
+                
+                elif 'Channel' in line:
+                    try:
+                        current['channel'] = int(line.split(':')[1].strip())
+                    except:
+                        pass
+                
+                elif 'Authentication' in line:
+                    current['auth'] = line.split(':')[1].strip() if ':' in line else ''
+                
+                elif 'Cipher' in line:
+                    current['security'] = line.split(':')[1].strip() if ':' in line else ''
+            
+            return current
+            
+        elif system == 'Linux':
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'NAME,TYPE,STATE', 'connection', 'show', '--active'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            current = {'ssid': None, 'signal': 0, 'bssid': '', 'channel': 0, 'security': '', 'auth': '', 'connected': False}
+            
+            for line in result.stdout.split('\n'):
+                if 'wifi' in line.lower():
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        current['ssid'] = parts[0]
+                        current['connected'] = True
+            
+            if current['connected']:
+                signal_result = subprocess.run(
+                    ['nmcli', '-t', '-f', 'SIGNAL', 'device', 'wifi', 'list'],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+                try:
+                    current['signal'] = int(signal_result.stdout.split('\n')[0])
+                except:
+                    pass
+            
+            return current
+        
+        return {'ssid': None, 'connected': False}
+    
+    except Exception as e:
+        return {'ssid': None, 'connected': False, 'error': str(e)}
+
+
 def get_public_ip_info():
     try:
         with urllib.request.urlopen('https://ipapi.co/json/', timeout=5) as response:
@@ -1386,6 +1836,7 @@ def scan_wifi():
     else:
         networks = {'error': f'Unsupported OS: {system}'}
     
+    current_wifi = get_current_wifi()
     public_info = get_public_ip_info()
     
     isp_info = public_info.get('org', 'Unknown ISP')
@@ -1394,6 +1845,7 @@ def scan_wifi():
     result = {
         'platform': system,
         'networks': networks if isinstance(networks, list) else [],
+        'current_wifi': current_wifi,
         'error': networks.get('error') if isinstance(networks, dict) else None,
         'public_ip': public_info.get('ip', 'N/A'),
         'isp': isp_data,
@@ -1462,6 +1914,16 @@ def api_wifi():
     return jsonify(scan_wifi())
 
 
+@app.route('/api/current-wifi')
+def api_current_wifi():
+    return jsonify(get_current_wifi())
+
+
+@app.route('/api/network-settings')
+def api_network_settings():
+    return jsonify(get_network_settings())
+
+
 @app.route('/api/ipinfo')
 def api_ipinfo():
     return jsonify(get_public_ip_info())
@@ -1479,6 +1941,9 @@ def api_connect():
     ))
 
 
+def open_browser():
+    webbrowser.open('http://localhost:5000')
+
 if __name__ == '__main__':
     print('=' * 50)
     print('WiFi & Network Scanner')
@@ -1487,4 +1952,9 @@ if __name__ == '__main__':
     print('Open browser: http://localhost:5000')
     print('Press Ctrl+C to stop')
     print('=' * 50)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    
+    # Auto open browser after 2 seconds
+    threading.Timer(2, open_browser).start()
+    
+    # Run Flask app
+    app.run(host='0.0.0.0', port=5000, debug=False)
